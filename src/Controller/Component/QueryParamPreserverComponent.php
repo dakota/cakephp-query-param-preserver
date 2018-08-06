@@ -2,6 +2,7 @@
 namespace Psa\QueryParamPreserver\Controller\Component;
 
 use Cake\Controller\Component;
+use Cake\Routing\Router;
 
 /**
  * QueryParamPreserverComponent
@@ -30,12 +31,7 @@ class QueryParamPreserverComponent extends Component {
      */
     public function actionCheck()
     {
-        $request = $this->getController()->request;
-
-        return in_array(
-            $request->getParam('action'),
-            $this->getConfig('actions')
-        );
+        return in_array($this->request->getParam('action'), $this->getConfig('actions'));
     }
 
     /**
@@ -45,24 +41,20 @@ class QueryParamPreserverComponent extends Component {
      */
     public function preserve()
     {
-        $request = $this->getController()->request;
-        $query = $request->getQueryParams();
-
-        if ($query) {
-            $ignoreParams = $this->getConfig('ignoreParams');
-            if (!empty($ignoreParams)) {
-                foreach ($ignoreParams as $param) {
-                    if (isset($query[$param])) {
-                        unset($query[$param]);
-                    }
+        $query = $this->request->getQuery();
+        $ignoreParams = $this->config('ignoreParams');
+        if (!empty($ignoreParams)) {
+            foreach ($ignoreParams as $param) {
+                if (isset($query[$param])) {
+                    unset($query[$param]);
                 }
             }
-
-            $request->session()->write(
-                $this->_hashKey(),
-                $query
-            );
         }
+
+        $this->request->getSession()->write(
+            $this->_hashKey(),
+            $query
+        );
     }
 
     /**
@@ -72,62 +64,56 @@ class QueryParamPreserverComponent extends Component {
      */
     protected function _hashKey()
     {
-        return $this->getController()->request->getUri()->getPath();
+        $string = '';
+        if (!empty($this->request->plugin)) {
+            $string .= $this->request->plugin;
+        }
+        $string .= $this->request->controller . '.' . $this->request->action;
+        return $string;
     }
 
     /**
      * Applies the preserved query params
      *
-     * @return \Cake\Http\Response|null
+     * @return \Cake\Network\Response|null
      */
     public function apply()
     {
-        $request = $this->getController()->request;
         $key = $this->_hashKey();
-
-        if (empty($request->getQuery()) && $request->session()->check($key)) {
-            if(!empty($request->session()->read($key))) {
-                return $this->getController()->redirect(
-                    $key
-                    . '?' . http_build_query($request->session()->read($key))
-                );
-            }
+        if (empty($this->request->query) && $this->request->session()->check($key)) {
+            $this->request->query = array_merge(
+                (array)$this->request->session()->read($key),
+                $this->request->query
+            );
+            $request = $this->_registry->getController()->request;
+            if ($request->here !== Router::url(['?' => $this->request->query])) {
+                return $this->_registry->getController()->redirect(['?' => $this->request->query]);
+            };
         }
     }
 
     /**
      * beforeFilter callback
      *
-     * @return \Cake\Http\Response|null
+     * @return \Cake\Network\Response|null
      */
     public function beforeFilter()
     {
-        if ($this->getConfig('autoApply') && $this->actionCheck()) {
-            return $this->_autoApply();
-        }
-    }
-
-    /**
-     * Automatically applies the preserved query params
-     *
-     * Called in the beforeFilter() method
-     *
-     * @return \Cake\Http\Response|null
-     */
-    protected function _autoApply() {
-        $request = $this->getController()->request;
-        $params = $request->getQueryParams();
+        $params = $this->request->getQueryParams();
         $ignoreParam = $this->getConfig('disablePreserveWithParam');
 
-        if (isset($params[$ignoreParam])) {
-            unset($params[$ignoreParam]);
+        if ($this->getConfig('autoApply') && $this->actionCheck()) {
+            if (isset($params[$ignoreParam])) {
+                unset($params[$ignoreParam]);
+                $this->request->session()->delete($this->_hashKey());
+                $this->request = $this->request->withQueryParams($params);
+                $this->getController()->redirect([
+                    '?' => $params
+                ]);
+            }
 
-            $request->session()->delete($this->_hashKey());
-
-            return $this->getController()->redirect($this->_hashKey());
+            return $this->apply();
         }
-
-        return $this->apply();
     }
 
     /**
@@ -141,4 +127,5 @@ class QueryParamPreserverComponent extends Component {
             $this->preserve();
         }
     }
+
 }
